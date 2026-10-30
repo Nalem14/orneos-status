@@ -20,7 +20,7 @@ concurrency:
 jobs:
   status:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
@@ -45,6 +45,17 @@ jobs:
           path: site
       - id: deploy
         uses: actions/deploy-pages@v4
+      # GitHub's schedule starts late or skips runs: each run also starts the next one about 5 minutes later, all on
+      # GitHub (never on our server, so it goes on when the server is down), unless a run is already waiting.
+      - name: Next run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sleep 230
+          waiting=$(gh run list -R "$GITHUB_REPOSITORY" --workflow status.yml --limit 10 --json status \
+            --jq '[.[] | select(.status == "queued" or .status == "pending" or .status == "waiting" or .status == "requested")] | length')
+          [ "$waiting" -gt 0 ] && echo "a run is already waiting" || gh workflow run status.yml -R "$GITHUB_REPOSITORY" --ref main
       # GitHub turns off the schedule of a public repository after 60 days without activity.
       - name: Keep the schedule on
         if: github.event_name == 'schedule'
