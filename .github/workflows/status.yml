@@ -1,0 +1,52 @@
+# status.orneos.eu, from outside our server: probes every 5 minutes, page on GitHub Pages, issues for outages.
+# The data (90-day history, last notices, alert state) is one commit on the "data" branch, replaced at each run.
+name: status
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  issues: write
+  actions: write
+concurrency:
+  group: status
+  cancel-in-progress: false
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Previous data
+        run: git clone -q --depth 1 --branch data "https://github.com/${GITHUB_REPOSITORY}.git" data || mkdir -p data
+      - name: Checks
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: php check.php data
+      - name: Page
+        run: php build.php data site
+      - name: Save data
+        run: |
+          cd data && rm -rf .git && git init -q -b data && git add -A
+          git -c user.name=orneos-status -c user.email=41898282+github-actions[bot]@users.noreply.github.com commit -qm data
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" data
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
+      # GitHub turns off the schedule of a public repository after 60 days without activity.
+      - name: Keep the schedule on
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/status.yml/enable" >/dev/null || true
