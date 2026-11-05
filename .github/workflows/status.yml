@@ -26,6 +26,30 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      # deploy-pages names the deployment after the commit of main. A workflow_dispatch of that same commit reports
+      # success and keeps the previous artifact (the page froze on 5 Nov while every run was green). A new commit
+      # makes the following run publish for real. At most one such commit every 2 hours.
+      - name: Refresh if the page is stuck
+        run: |
+          hdr=$(curl -fsSI --max-time 20 "https://status.orneos.eu/?n=$(date +%s)") || { echo "page unreachable, not refreshing"; exit 0; }
+          lm=$(printf '%s\n' "$hdr" | awk 'BEGIN{IGNORECASE=1} /^last-modified:/{sub(/\r/,""); print substr($0,16); exit}')
+          if [ -z "$lm" ]; then
+            echo "no Last-Modified, not refreshing"
+            exit 0
+          fi
+          epoch=$(date -u -d "$lm" +%s)
+          now=$(date -u +%s)
+          age=$((now - epoch))
+          echo "live page last-modified: $lm (${age}s ago)"
+          if [ "$age" -lt 1800 ]; then
+            exit 0
+          fi
+          if git log --since='2 hours ago' --format=%s | grep -qx 'Refresh the status page'; then
+            echo "already refreshed in the last 2 hours"
+            exit 0
+          fi
+          git -c user.name=orneos-status -c user.email=41898282+github-actions[bot]@users.noreply.github.com commit --allow-empty -m "Refresh the status page"
+          git push origin HEAD:main
       - name: Previous data
         run: git clone -q --depth 1 --branch data "https://github.com/${GITHUB_REPOSITORY}.git" data || mkdir -p data
       - name: Checks
@@ -34,17 +58,24 @@ jobs:
         run: php check.php data
       - name: Page
         run: php build.php data site
-      - name: Save data
-        run: |
-          cd data && rm -rf .git && git init -q -b data && git add -A
-          git -c user.name=orneos-status -c user.email=41898282+github-actions[bot]@users.noreply.github.com commit -qm data
-          git push -qf "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" data
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
       - id: deploy
         uses: actions/deploy-pages@v4
+      # After the page is published: a rejected data push must not drop the page that was just built.
+      # GitHub sometimes answers "fatal error in commit_refs" on the force-push; try again.
+      - name: Save data
+        run: |
+          cd data && rm -rf .git && git init -q -b data && git add -A
+          git -c user.name=orneos-status -c user.email=41898282+github-actions[bot]@users.noreply.github.com commit -qm data
+          for i in 1 2 3 4 5; do
+            git push -qf "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" data && exit 0
+            echo "data push failed ($i), retrying"
+            sleep 10
+          done
+          exit 1
       # GitHub's schedule starts late or skips runs: each run also starts the next one about 5 minutes later, all on
       # GitHub (never on our server, so it goes on when the server is down), unless a run is already waiting.
       - name: Next run
