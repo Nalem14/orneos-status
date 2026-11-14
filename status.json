@@ -1,0 +1,1 @@
+{"checked_at":"2026-11-14T19:18:31+00:00","checks":{"site":{"ok":true,"detail":"HTTP 200 (645 ms)"},"cloud":{"ok":true,"detail":"HTTP 200 (665 ms)"},"mail_smtps":{"ok":true,"detail":"port 465 open"},"mail_imaps":{"ok":true,"detail":"port 993 open"}}}
